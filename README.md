@@ -59,7 +59,7 @@ Each finding includes a safety rating:
 
 ## Requirements
 
-- macOS (tested on Ventura, Sonoma, and Sequoia)
+- macOS
 - Works on both Apple Silicon and Intel
 - No dependencies beyond standard macOS command-line tools
 - Does not require sudo (but notes where sudo would reveal more)

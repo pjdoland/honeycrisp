@@ -42,8 +42,8 @@ setup_colors() {
 
 print_banner() {
     echo ""
-    echo "${BOLD}${GREEN}  🍎  H O N E Y C R I S P${RESET}"
-    echo "${BOLD}${GREEN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo "${BOLD}${GREEN}  H O N E Y C R I S P${RESET}"
+    echo "${BOLD}${GREEN}  ----------------------------------------${RESET}"
     echo "${DIM}  Mac Disk Audit Tool v${VERSION}${RESET}"
     echo ""
     echo "  ${CYAN}This script is ${BOLD}READ-ONLY${RESET}${CYAN} — it will ${BOLD}never${RESET}${CYAN} delete,"
@@ -56,27 +56,38 @@ print_banner() {
 
 print_header() {
     local title="$1"
-    local icon="${2:-📂}"
     echo ""
-    echo "${BOLD}${BLUE}  ═══════════════════════════════════════════════════════${RESET}"
-    echo "${BOLD}${BLUE}  ${icon}  ${title}${RESET}"
-    echo "${BOLD}${BLUE}  ═══════════════════════════════════════════════════════${RESET}"
+    echo "${BOLD}${BLUE}  -------------------------------------------------------${RESET}"
+    echo "${BOLD}${BLUE}  ${title}${RESET}"
+    echo "${BOLD}${BLUE}  -------------------------------------------------------${RESET}"
     echo ""
 }
 
 print_scanning() {
-    echo "  ${DIM}⏳ Scanning ${1}...${RESET}"
+    echo "  ${DIM}Scanning ${1}...${RESET}"
+}
+
+# Format a safety tag as fixed-width colored text
+safety_tag() {
+    case "$1" in
+        safe)     printf "${GREEN}[SAFE]${RESET}   " ;;
+        review)   printf "${YELLOW}[REVIEW]${RESET} " ;;
+        caution)  printf "${RED}[CAUTION]${RESET}" ;;
+        *)        printf "         " ;;
+    esac
 }
 
 print_row() {
-    local safety="$1"   # 🟢 🟡 🔴
+    local safety="$1"   # safe, review, caution
     local label="$2"
     local size="$3"
     local path="${4:-}"
+    local tag
+    tag=$(safety_tag "$safety")
     if [[ -n "$path" ]]; then
-        printf "  %s  %-35s %8s    ${DIM}%s${RESET}\n" "$safety" "$label" "$size" "$path"
+        printf "  %s %-32s %10s   ${DIM}%s${RESET}\n" "$tag" "$label" "$size" "$path"
     else
-        printf "  %s  %-35s %8s\n" "$safety" "$label" "$size"
+        printf "  %s %-32s %10s\n" "$tag" "$label" "$size"
     fi
 }
 
@@ -85,22 +96,22 @@ print_subrow() {
     local size="$2"
     local path="${3:-}"
     if [[ -n "$path" ]]; then
-        printf "       %-33s %8s    ${DIM}%s${RESET}\n" "$label" "$size" "$path"
+        printf "            %-30s %10s   ${DIM}%s${RESET}\n" "$label" "$size" "$path"
     else
-        printf "       %-33s %8s\n" "$label" "$size"
+        printf "            %-30s %10s\n" "$label" "$size"
     fi
 }
 
 print_note() {
-    echo "  ${DIM}  ℹ️  $1${RESET}"
+    echo "    ${DIM}> $1${RESET}"
 }
 
 print_warn() {
-    echo "  ${YELLOW}  ⚠️  $1${RESET}"
+    echo "    ${YELLOW}! $1${RESET}"
 }
 
 print_skip() {
-    echo "  ${DIM}  ⊘  $1 — not found, skipping${RESET}"
+    echo "    ${DIM}- $1 -- not found, skipping${RESET}"
 }
 
 # Get size of a path in bytes; returns 0 if path doesn't exist or errors
@@ -175,9 +186,24 @@ add_summary() {
     GRAND_TOTAL_BYTES=$(( GRAND_TOTAL_BYTES + bytes ))
 }
 
+# Known macOS system directories in Application Support that aren't third-party apps
+is_system_app_support() {
+    local name="$1"
+    case "$name" in
+        AddressBook|Caches|CallHistoryDB|CallHistoryTransactions|CloudDocs|\
+        CrashReporter|FileProvider|Knowledge|SyncServices|icdd|tts|\
+        com.apple.*|Apple|FaceTime|iCloud*|MobileSync|ScreenTimeAgent|\
+        StatusKit*|Dock|Chromium|ATS|SpeechSynthesizer)
+            return 0 ;;
+    esac
+    return 1
+}
+
 # Check if an app exists in /Applications (loosely)
 app_exists() {
     local name="$1"
+    # macOS system components are not "missing" apps
+    is_system_app_support "$name" && return 0
     # Check common locations
     [[ -d "/Applications/${name}.app" ]] || \
     [[ -d "/Applications/${name}" ]] || \
@@ -248,12 +274,21 @@ macos_build=$(sw_vers -buildVersion 2>/dev/null || echo "")
 hw_model=$(sysctl -n hw.model 2>/dev/null || echo "Unknown")
 chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
 
-# Disk info from df
-disk_info=$(df -H / 2>/dev/null | tail -1)
-disk_total=$(echo "$disk_info" | awk '{print $2}')
-disk_used=$(echo "$disk_info" | awk '{print $3}')
-disk_free=$(echo "$disk_info" | awk '{print $4}')
-disk_pct=$(echo "$disk_info" | awk '{print $5}')
+# Disk info — prefer APFS container-level data (df is misleading on APFS)
+apfs_info=$(diskutil apfs list 2>/dev/null)
+if [[ -n "$apfs_info" ]]; then
+    disk_total=$(echo "$apfs_info" | grep "Capacity Ceiling" | head -1 | sed -E 's/.*\(([0-9.]+ [KMGT]B)\).*/\1/')
+    disk_used=$(echo "$apfs_info" | grep "Capacity In Use By Volumes" | head -1 | sed -E 's/.*\(([0-9.]+ [KMGT]B)\).*/\1/')
+    disk_pct=$(echo "$apfs_info" | grep "Capacity In Use By Volumes" | head -1 | sed -E 's/.*\(([0-9.]+% used)\).*/\1/')
+    disk_free=$(echo "$apfs_info" | grep "Capacity Not Allocated" | head -1 | sed -E 's/.*\(([0-9.]+ [KMGT]B)\).*/\1/')
+else
+    # Fallback to df
+    disk_info=$(df -H / 2>/dev/null | tail -1)
+    disk_total=$(echo "$disk_info" | awk '{print $2}')
+    disk_used=$(echo "$disk_info" | awk '{print $3}')
+    disk_free=$(echo "$disk_info" | awk '{print $4}')
+    disk_pct=$(echo "$disk_info" | awk '{print $5}')
+fi
 
 echo "  ${BOLD}macOS${RESET}        ${macos_version} (${macos_build})"
 echo "  ${BOLD}Hardware${RESET}     ${hw_model} — ${chip}"
@@ -263,7 +298,7 @@ echo "  ${BOLD}Disk Free${RESET}    ${disk_free}"
 
 if [[ "$QUICK_MODE" == true ]]; then
     echo ""
-    echo "  ${YELLOW}⚡ Quick mode enabled — skipping deep scans${RESET}"
+    echo "  ${YELLOW}Quick mode enabled -- skipping deep scans${RESET}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -278,8 +313,8 @@ if check_exists "$cache_dir"; then
     print_scanning "$cache_dir"
     total_bytes=$(safe_du_bytes "$cache_dir")
     total_hr=$(format_size "$total_bytes")
-    print_row "🟢" "User Caches" "$total_hr" "$cache_dir"
-    add_summary "System & App Caches" "$total_bytes" "🟢 Safe"
+    print_row "safe" "User Caches" "$total_hr" "$cache_dir"
+    add_summary "System & App Caches" "$total_bytes" "Safe"
 
     # Top 10 subdirs
     echo ""
@@ -301,8 +336,8 @@ if check_exists "$sys_cache"; then
     print_scanning "$sys_cache"
     total_bytes=$(safe_du_bytes "$sys_cache")
     total_hr=$(format_size "$total_bytes")
-    print_row "🟡" "System Caches" "$total_hr" "$sys_cache"
-    add_summary "System & App Caches" "$total_bytes" "🟢 Safe"
+    print_row "review" "System Caches" "$total_hr" "$sys_cache"
+    add_summary "System & App Caches" "$total_bytes" "Safe"
     print_note "Some files may require sudo to inspect"
 else
     print_skip "$sys_cache"
@@ -313,7 +348,7 @@ sys_lib_cache="/System/Library/Caches"
 if check_exists "$sys_lib_cache"; then
     total_bytes=$(safe_du_bytes "$sys_lib_cache")
     total_hr=$(format_size "$total_bytes")
-    print_row "🔴" "macOS System Caches" "$total_hr" "$sys_lib_cache"
+    print_row "caution" "macOS System Caches" "$total_hr" "$sys_lib_cache"
     print_note "Managed by macOS — do not modify"
 fi
 
@@ -325,14 +360,17 @@ print_header "LOGS" "📋"
 
 log_total=0
 
-for log_dir in "$HOME/Library/Logs" "/Library/Logs" "/var/log"; do
+log_labels=("User Logs" "System Logs" "System Logs (var)")
+log_paths=("$HOME/Library/Logs" "/Library/Logs" "/var/log")
+log_safety=("safe" "safe" "review")
+
+for i in "${!log_paths[@]}"; do
+    log_dir="${log_paths[$i]}"
     if check_exists "$log_dir"; then
         print_scanning "$log_dir"
         bytes=$(safe_du_bytes "$log_dir")
         hr=$(format_size "$bytes")
-        safety="🟢"
-        [[ "$log_dir" == "/var/log" ]] && safety="🟡"
-        print_row "$safety" "$(basename "$log_dir") logs" "$hr" "$log_dir"
+        print_row "${log_safety[$i]}" "${log_labels[$i]}" "$hr" "$log_dir"
         [[ "$log_dir" == "/var/log" ]] && print_note "Full details may require sudo"
         log_total=$(( log_total + bytes ))
     else
@@ -340,7 +378,7 @@ for log_dir in "$HOME/Library/Logs" "/Library/Logs" "/var/log"; do
     fi
 done
 
-add_summary "Logs" "$log_total" "🟢 Safe"
+add_summary "Logs" "$log_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TEMPORARY FILES
@@ -350,25 +388,24 @@ print_header "TEMPORARY FILES" "🗑️"
 
 tmp_total=0
 
-for tmp_dir in "/tmp" "/private/tmp"; do
-    if check_exists "$tmp_dir"; then
-        bytes=$(safe_du_bytes "$tmp_dir")
-        hr=$(format_size "$bytes")
-        print_row "🟡" "Temp files" "$hr" "$tmp_dir"
-        tmp_total=$(( tmp_total + bytes ))
-    fi
-done
+# /tmp is a symlink to /private/tmp on macOS — only count once
+if check_exists "/private/tmp"; then
+    bytes=$(safe_du_bytes "/private/tmp")
+    hr=$(format_size "$bytes")
+    print_row "review" "Temp files" "$hr" "/private/tmp"
+    tmp_total=$(( tmp_total + bytes ))
+fi
 
 # /var/folders
 if check_exists "/var/folders"; then
     bytes=$(safe_du_bytes "/var/folders")
     hr=$(format_size "$bytes")
-    print_row "🔴" "macOS per-user temp" "$hr" "/var/folders"
+    print_row "caution" "macOS per-user temp" "$hr" "/var/folders"
     print_note "Managed by macOS — report only"
     tmp_total=$(( tmp_total + bytes ))
 fi
 
-add_summary "Temporary Files" "$tmp_total" "🟡 Review"
+add_summary "Temporary Files" "$tmp_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # APPLICATION SUPPORT LEFTOVERS
@@ -381,7 +418,7 @@ if check_exists "$app_support"; then
     print_scanning "$app_support"
     total_bytes=$(safe_du_bytes "$app_support")
     total_hr=$(format_size "$total_bytes")
-    print_row "🟡" "Application Support (total)" "$total_hr" "$app_support"
+    print_row "review" "Application Support (total)" "$total_hr" "$app_support"
 
     echo ""
     echo "  ${DIM}  Top 15 largest subdirectories:${RESET}"
@@ -393,11 +430,11 @@ if check_exists "$app_support"; then
         if app_exists "$dir_name"; then
             print_subrow "$dir_name" "$size_hr"
         else
-            printf "       ${YELLOW}%-33s %8s    ⚠️  App not found in /Applications${RESET}\n" "$dir_name" "$size_hr"
+            printf "            ${YELLOW}%-30s %10s   ! App not found in /Applications${RESET}\n" "$dir_name" "$size_hr"
         fi
     done
 
-    add_summary "Application Support" "$total_bytes" "🟡 Review"
+    add_summary "Application Support" "$total_bytes" "Review"
 else
     print_skip "$app_support"
 fi
@@ -432,14 +469,14 @@ for i in "${!browser_names[@]}"; do
     if check_exists "$path"; then
         bytes=$(safe_du_bytes "$path")
         hr=$(format_size "$bytes")
-        print_row "🟢" "$browser cache" "$hr" "$path"
+        print_row "safe" "$browser cache" "$hr" "$path"
         browser_total=$(( browser_total + bytes ))
     else
         print_skip "$browser cache"
     fi
 done
 
-add_summary "Browser Caches" "$browser_total" "🟢 Safe"
+add_summary "Browser Caches" "$browser_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # iOS / iPHONE BACKUPS
@@ -464,10 +501,10 @@ if check_exists "$backup_dir"; then
         now_epoch=$(date +%s)
         age_days=$(( (now_epoch - mod_epoch) / 86400 ))
 
-        safety="🟡"
+        safety="review"
         age_note=""
         if (( age_days > 180 )); then
-            safety="🟢"
+            safety="safe"
             age_note=" (${age_days} days old — likely safe to remove)"
         fi
 
@@ -482,7 +519,7 @@ else
     print_skip "iOS Backups"
 fi
 
-add_summary "iOS Backups" "$backup_total" "🟡 Review"
+add_summary "iOS Backups" "$backup_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # XCODE & DEVELOPER TOOLS
@@ -499,9 +536,9 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$dd"; then
         bytes=$(safe_du_bytes "$dd")
         hr=$(format_size "$bytes")
-        print_row "🟢" "Xcode DerivedData" "$hr" "$dd"
+        print_row "safe" "Xcode DerivedData" "$hr" "$dd"
         xcode_total=$(( xcode_total + bytes ))
-        add_summary "Xcode DerivedData" "$bytes" "🟢 Safe"
+        add_summary "Xcode DerivedData" "$bytes" "Safe"
     fi
 
     # Archives
@@ -509,9 +546,9 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$archives"; then
         bytes=$(safe_du_bytes "$archives")
         hr=$(format_size "$bytes")
-        print_row "🟡" "Xcode Archives" "$hr" "$archives"
+        print_row "review" "Xcode Archives" "$hr" "$archives"
         xcode_total=$(( xcode_total + bytes ))
-        add_summary "Xcode Archives" "$bytes" "🟡 Review"
+        add_summary "Xcode Archives" "$bytes" "Review"
     fi
 
     # iOS DeviceSupport
@@ -519,7 +556,7 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$ds"; then
         bytes=$(safe_du_bytes "$ds")
         hr=$(format_size "$bytes")
-        print_row "🟡" "iOS DeviceSupport" "$hr" "$ds"
+        print_row "review" "iOS DeviceSupport" "$hr" "$ds"
         echo "  ${DIM}  Versions:${RESET}"
         du -sk "$ds"/*/ 2>/dev/null | sort -rn | while read -r kb dir; do
             ver=$(basename "$dir")
@@ -527,7 +564,7 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
             print_subrow "$ver" "$size_hr"
         done
         xcode_total=$(( xcode_total + bytes ))
-        add_summary "Xcode DeviceSupport" "$bytes" "🟡 Review"
+        add_summary "Xcode DeviceSupport" "$bytes" "Review"
     fi
 
     # CoreSimulator Devices
@@ -535,9 +572,9 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$sim"; then
         bytes=$(safe_du_bytes "$sim")
         hr=$(format_size "$bytes")
-        print_row "🟡" "Simulator Devices" "$hr" "$sim"
+        print_row "review" "Simulator Devices" "$hr" "$sim"
         xcode_total=$(( xcode_total + bytes ))
-        add_summary "Simulator Devices" "$bytes" "🟡 Review"
+        add_summary "Simulator Devices" "$bytes" "Review"
     fi
 
     # CoreSimulator Caches
@@ -545,7 +582,7 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$sim_cache"; then
         bytes=$(safe_du_bytes "$sim_cache")
         hr=$(format_size "$bytes")
-        print_row "🟢" "Simulator Caches" "$hr" "$sim_cache"
+        print_row "safe" "Simulator Caches" "$hr" "$sim_cache"
         xcode_total=$(( xcode_total + bytes ))
     fi
 
@@ -554,7 +591,7 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
     if check_exists "$sim_vol"; then
         bytes=$(safe_du_bytes "$sim_vol")
         hr=$(format_size "$bytes")
-        print_row "🟡" "Simulator Runtimes" "$hr" "$sim_vol"
+        print_row "review" "Simulator Runtimes" "$hr" "$sim_vol"
         echo "  ${DIM}  Runtimes:${RESET}"
         du -sk "$sim_vol"/*/ 2>/dev/null | sort -rn | while read -r kb dir; do
             rt=$(basename "$dir")
@@ -562,7 +599,7 @@ if check_exists "/Applications/Xcode.app" || check_exists "$HOME/Library/Develop
             print_subrow "$rt" "$size_hr"
         done
         xcode_total=$(( xcode_total + bytes ))
-        add_summary "Simulator Runtimes" "$bytes" "🟡 Review"
+        add_summary "Simulator Runtimes" "$bytes" "Review"
     fi
 
     if (( xcode_total == 0 )); then
@@ -587,7 +624,7 @@ for pair in "$HOME/.npm/_cacache:npm cache" "$HOME/.yarn/cache:yarn cache" "$HOM
     if check_exists "$path"; then
         bytes=$(safe_du_bytes "$path")
         hr=$(format_size "$bytes")
-        print_row "🟢" "$label" "$hr" "$path"
+        print_row "safe" "$label" "$hr" "$path"
         node_total=$(( node_total + bytes ))
     fi
 done
@@ -621,8 +658,8 @@ if [[ "$QUICK_MODE" == false ]]; then
         done <<< "$nm_results"
 
         echo ""
-        print_row "🟡" "node_modules (total)" "$(format_size $nm_total)"
-        add_summary "node_modules" "$nm_total" "🟡 Review"
+        print_row "review" "node_modules (total)" "$(format_size $nm_total)"
+        add_summary "node_modules" "$nm_total" "Review"
     else
         print_skip "node_modules directories"
     fi
@@ -630,8 +667,9 @@ else
     print_skip "node_modules scan (--quick mode)"
 fi
 
-node_total=$(( node_total + nm_total ))
-add_summary "Node/npm/yarn Caches" "$node_total" "🟢 Safe"
+# Only add package manager caches (not node_modules) to this category
+# node_modules are tracked separately to avoid double-counting
+add_summary "Node/npm/yarn Caches" "$node_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PYTHON / PIP / CONDA
@@ -651,7 +689,7 @@ for pair in \
     if check_exists "$path"; then
         bytes=$(safe_du_bytes "$path")
         hr=$(format_size "$bytes")
-        print_row "🟢" "$label" "$hr" "$path"
+        print_row "safe" "$label" "$hr" "$path"
         py_total=$(( py_total + bytes ))
     fi
 done
@@ -660,7 +698,7 @@ if (( py_total == 0 )); then
     echo "  ${DIM}  No Python caches found.${RESET}"
 fi
 
-add_summary "Python/pip/conda" "$py_total" "🟢 Safe"
+add_summary "Python/pip/conda" "$py_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HOMEBREW
@@ -676,7 +714,7 @@ if command -v brew &>/dev/null; then
     if check_exists "$brew_cache"; then
         bytes=$(safe_du_bytes "$brew_cache")
         hr=$(format_size "$bytes")
-        print_row "🟢" "Homebrew cache" "$hr" "$brew_cache"
+        print_row "safe" "Homebrew cache" "$hr" "$brew_cache"
         print_note "Clean with: brew cleanup --prune=all"
         brew_total=$(( brew_total + bytes ))
     fi
@@ -696,7 +734,7 @@ else
     print_skip "Homebrew (not installed)"
 fi
 
-add_summary "Homebrew Cache" "$brew_total" "🟢 Safe"
+add_summary "Homebrew Cache" "$brew_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DOCKER
@@ -710,7 +748,7 @@ docker_dir="$HOME/Library/Containers/com.docker.docker"
 if check_exists "$docker_dir"; then
     bytes=$(safe_du_bytes "$docker_dir")
     hr=$(format_size "$bytes")
-    print_row "🟡" "Docker data" "$hr" "$docker_dir"
+    print_row "review" "Docker data" "$hr" "$docker_dir"
     print_note "Run 'docker system df' for detailed breakdown"
     print_note "Run 'docker system prune' to clean unused data"
     docker_total=$bytes
@@ -722,7 +760,7 @@ else
     print_skip "Docker (not installed)"
 fi
 
-add_summary "Docker" "$docker_total" "🟡 Review"
+add_summary "Docker" "$docker_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRASH
@@ -738,7 +776,7 @@ if check_exists "$trash_dir"; then
     hr=$(format_size "$bytes")
     file_count=$(find "$trash_dir" -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')
     file_count=$(( file_count - 1 ))  # subtract the directory itself
-    print_row "🟢" "Trash (${file_count} items)" "$hr" "$trash_dir"
+    print_row "safe" "Trash (${file_count} items)" "$hr" "$trash_dir"
     trash_total=$bytes
 fi
 
@@ -750,13 +788,13 @@ for vol in /Volumes/*/; do
         if (( bytes > 0 )); then
             hr=$(format_size "$bytes")
             vol_name=$(basename "$vol")
-            print_row "🟢" "Trash on ${vol_name}" "$hr" "$trashes"
+            print_row "safe" "Trash on ${vol_name}" "$hr" "$trashes"
             trash_total=$(( trash_total + bytes ))
         fi
     fi
 done
 
-add_summary "Trash" "$trash_total" "🟢 Safe"
+add_summary "Trash" "$trash_total" "Safe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DISK IMAGES & INSTALLERS
@@ -786,7 +824,7 @@ if (( installer_total == 0 )); then
     echo "  ${DIM}  No .dmg, .pkg, or .iso files found.${RESET}"
 fi
 
-add_summary "Disk Images/Installers" "$installer_total" "🟡 Review"
+add_summary "Disk Images/Installers" "$installer_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MAIL
@@ -800,7 +838,7 @@ mail_dir="$HOME/Library/Mail"
 if check_exists "$mail_dir"; then
     bytes=$(safe_du_bytes "$mail_dir")
     hr=$(format_size "$bytes")
-    print_row "🟡" "Mail data" "$hr" "$mail_dir"
+    print_row "review" "Mail data" "$hr" "$mail_dir"
     mail_total=$bytes
 
     echo "  ${DIM}  Top-level breakdown:${RESET}"
@@ -815,7 +853,7 @@ mail_container="$HOME/Library/Containers/com.apple.mail"
 if check_exists "$mail_container"; then
     bytes=$(safe_du_bytes "$mail_container")
     hr=$(format_size "$bytes")
-    print_row "🟡" "Mail container/attachments" "$hr" "$mail_container"
+    print_row "review" "Mail container/attachments" "$hr" "$mail_container"
     mail_total=$(( mail_total + bytes ))
 fi
 
@@ -823,7 +861,7 @@ if (( mail_total == 0 )); then
     echo "  ${DIM}  No Mail data found.${RESET}"
 fi
 
-add_summary "Mail" "$mail_total" "🟡 Review"
+add_summary "Mail" "$mail_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHOTOS & MEDIA
@@ -837,7 +875,7 @@ photos_lib="$HOME/Pictures/Photos Library.photoslibrary"
 if check_exists "$photos_lib"; then
     bytes=$(safe_du_bytes "$photos_lib")
     hr=$(format_size "$bytes")
-    print_row "🔴" "Photos Library" "$hr" "$photos_lib"
+    print_row "caution" "Photos Library" "$hr" "$photos_lib"
     print_note "Size depends on whether originals or optimized storage is used"
     photos_total=$bytes
 fi
@@ -848,7 +886,7 @@ if [[ -n "$other_photos" ]]; then
     while IFS= read -r lib; do
         bytes=$(safe_du_bytes "$lib")
         hr=$(format_size "$bytes")
-        print_row "🟡" "Photo Library" "$hr" "$lib"
+        print_row "review" "Photo Library" "$hr" "$lib"
         photos_total=$(( photos_total + bytes ))
     done <<< "$other_photos"
 fi
@@ -876,7 +914,7 @@ if [[ "$video_found" == false ]]; then
     echo "  ${DIM}     None found.${RESET}"
 fi
 
-add_summary "Photos & Media" "$photos_total" "🔴 Caution"
+add_summary "Photos & Media" "$photos_total" "Caution"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DOWNLOADS — OLD & LARGE FILES
@@ -917,16 +955,18 @@ if check_exists "$downloads_dir"; then
         fi
     done < <(find "$downloads_dir" -maxdepth 1 -type f 2>/dev/null)
 
-    if (( old_count > 0 )); then
+    if (( old_count > 0 && old_total > 0 )); then
         hr=$(format_size "$old_total")
-        print_row "🟡" "Old Downloads (${old_count} files)" "$hr" "Not accessed in 1+ year"
+        file_word="files"
+        (( old_count == 1 )) && file_word="file"
+        print_row "review" "Old Downloads (${old_count} ${file_word})" "$hr" "Not accessed in 1+ year"
         downloads_total=$old_total
     else
         echo "  ${DIM}     None found.${RESET}"
     fi
 fi
 
-add_summary "Old Downloads" "$downloads_total" "🟡 Review"
+add_summary "Old Downloads" "$downloads_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LANGUAGE PACK LEFTOVERS
@@ -948,13 +988,13 @@ if [[ "$QUICK_MODE" == false ]]; then
 
     if (( lproj_bytes > 0 )); then
         hr=$(format_size "$lproj_bytes")
-        print_row "🟢" "Non-English language packs" "$hr" "${lproj_count} .lproj bundles"
+        print_row "safe" "Non-English language packs" "$hr" "${lproj_count} .lproj bundles"
         print_note "Use Monolingual app (free) to safely remove"
     else
         echo "  ${DIM}  No significant language pack leftovers found.${RESET}"
     fi
 
-    add_summary "Language Packs" "$lproj_bytes" "🟢 Safe"
+    add_summary "Language Packs" "$lproj_bytes" "Safe"
 else
     print_skip "Language pack scan (--quick mode)"
 fi
@@ -965,10 +1005,11 @@ fi
 
 print_header "TIME MACHINE LOCAL SNAPSHOTS" "⏰"
 
-snapshots=$(tmutil listlocalsnapshots / 2>/dev/null)
+# Filter to only actual snapshot lines (com.apple.TimeMachine or com.apple.os.update)
+snapshots=$(tmutil listlocalsnapshots / 2>/dev/null | grep "^com\." || true)
 if [[ -n "$snapshots" ]]; then
     snap_count=$(echo "$snapshots" | wc -l | tr -d ' ')
-    print_row "🟡" "Local snapshots" "${snap_count} found" "Managed by macOS"
+    print_row "review" "Local snapshots" "${snap_count} found" "Managed by macOS"
     echo "  ${DIM}  Recent snapshots:${RESET}"
     echo "$snapshots" | head -10 | while read -r snap; do
         print_subrow "$snap" ""
@@ -993,7 +1034,7 @@ if [[ -n "$podcast_dirs" ]]; then
     while IFS= read -r pd; do
         bytes=$(safe_du_bytes "$pd")
         hr=$(format_size "$bytes")
-        print_row "🟢" "Podcasts" "$hr" "$pd"
+        print_row "safe" "Podcasts" "$hr" "$pd"
         media_total=$(( media_total + bytes ))
     done <<< "$podcast_dirs"
 fi
@@ -1004,8 +1045,8 @@ for music_dir in "$HOME/Music/iTunes" "$HOME/Music/Music"; do
         bytes=$(safe_du_bytes "$music_dir")
         hr=$(format_size "$bytes")
         label=$(basename "$music_dir")
-        safety="🟡"
-        (( bytes > 5368709120 )) && safety="🟡"  # flag if > 5GB
+        safety="review"
+        (( bytes > 5368709120 )) && safety="review"  # flag if > 5GB
         print_row "$safety" "$label library" "$hr" "$music_dir"
         media_total=$(( media_total + bytes ))
     fi
@@ -1015,7 +1056,7 @@ if (( media_total == 0 )); then
     echo "  ${DIM}  No significant podcast/music data found.${RESET}"
 fi
 
-add_summary "Podcasts & Music" "$media_total" "🟡 Review"
+add_summary "Podcasts & Music" "$media_total" "Review"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UNUSED APPLICATIONS
@@ -1026,40 +1067,49 @@ print_header "UNUSED APPLICATIONS" "👻"
 if [[ "$QUICK_MODE" == false ]]; then
     print_scanning "/Applications for unused apps"
     echo ""
-    echo "  ${DIM}  Apps not opened in over 180 days:${RESET}"
     now_epoch=$(date +%s)
     unused_found=false
+    no_data_count=0
 
     while IFS= read -r app; do
         [[ -d "$app" ]] || continue
         app_name=$(basename "$app")
 
-        # Get last used date
-        last_used=$(mdls -name kMDItemLastUsedDate -raw "$app" 2>/dev/null)
-        if [[ "$last_used" == "(null)" ]] || [[ -z "$last_used" ]]; then
-            last_used_epoch=0
-            last_used_str="Never"
-        else
-            last_used_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S %z" "$last_used" +%s 2>/dev/null || echo "0")
-            last_used_str=$(echo "$last_used" | cut -d' ' -f1)
+        # Get last used date via Spotlight -- skip apps with no data
+        last_used=$(mdls -name kMDItemLastUsedDate -raw "$app" 2>/dev/null || true)
+        if [[ "$last_used" == "(null)" ]] || [[ -z "$last_used" ]] || [[ "$last_used" == *"could not find"* ]]; then
+            no_data_count=$(( no_data_count + 1 ))
+            continue
         fi
 
-        age_days=999
-        if (( last_used_epoch > 0 )); then
-            age_days=$(( (now_epoch - last_used_epoch) / 86400 ))
+        last_used_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S %z" "$last_used" +%s 2>/dev/null || echo "0")
+        last_used_str="${last_used%% *}"
+
+        if (( last_used_epoch == 0 )); then
+            no_data_count=$(( no_data_count + 1 ))
+            continue
         fi
+
+        age_days=$(( (now_epoch - last_used_epoch) / 86400 ))
 
         if (( age_days > 180 )); then
+            if [[ "$unused_found" == false ]]; then
+                echo "  ${DIM}  Apps not opened in over 180 days:${RESET}"
+                unused_found=true
+            fi
             kb=$(du -sk "$app" 2>/dev/null | awk '{print $1}')
             bytes=$(( kb * 1024 ))
             hr=$(format_size "$bytes")
-            printf "  🟡  %-35s %8s    ${DIM}Last used: %s${RESET}\n" "${app_name}" "$hr" "$last_used_str"
-            unused_found=true
+            tag=$(safety_tag "review")
+            printf "  %s %-32s %10s   ${DIM}Last used: %s${RESET}\n" "$tag" "${app_name}" "$hr" "$last_used_str"
         fi
     done < <(find /Applications -maxdepth 1 -name "*.app" 2>/dev/null | sort)
 
     if [[ "$unused_found" == false ]]; then
-        echo "  ${DIM}     All apps have been used recently.${RESET}"
+        echo "  ${DIM}  No unused apps detected (based on Spotlight data).${RESET}"
+    fi
+    if (( no_data_count > 0 )); then
+        print_note "${no_data_count} apps had no Spotlight usage data and were skipped"
     fi
     print_note "Use AppCleaner (free) for thorough app removal"
 else
@@ -1093,10 +1143,8 @@ if [[ "$QUICK_MODE" == false ]]; then
             echo "$bytes $mod $f"
         done <<< "$large_files" | sort -rn | head -20 | while read -r bytes mod path; do
             hr=$(format_size "$bytes")
-            # Shorten path for display
             display_path="${path/#$HOME/~}"
-            printf "  🟡  %-45s %8s  ${DIM}%s${RESET}\n" "${display_path:0:45}" "$hr" "$mod"
-            large_total=$(( large_total + bytes ))
+            printf "  %10s   ${DIM}%s${RESET}  %s\n" "$hr" "$mod" "$display_path"
         done
     else
         echo "  ${DIM}  No files over ${LARGE_FILE_THRESHOLD_MB}MB found.${RESET}"
@@ -1110,7 +1158,7 @@ if [[ "$QUICK_MODE" == false ]]; then
         done <<< "$large_files"
     fi
 
-    add_summary "Large Files (>${LARGE_FILE_THRESHOLD_MB}MB)" "$large_total" "🟡 Review"
+    add_summary "Large Files (>${LARGE_FILE_THRESHOLD_MB}MB)" "$large_total" "Review"
 else
     print_skip "Large file scan (--quick mode)"
 fi
@@ -1125,7 +1173,7 @@ echo "  ${DIM}  Home directory:${RESET}"
 du -sk "$HOME"/*/ 2>/dev/null | sort -rn | head -20 | while read -r kb dir; do
     dir_name=$(basename "$dir")
     size_hr=$(format_size $(( kb * 1024 )))
-    printf "       %-40s %8s\n" "$dir_name/" "$size_hr"
+    printf "            %-40s %8s\n" "$dir_name/" "$size_hr"
 done
 
 echo ""
@@ -1133,7 +1181,7 @@ echo "  ${DIM}  ~/Library:${RESET}"
 du -sk "$HOME/Library"/*/ 2>/dev/null | sort -rn | head -20 | while read -r kb dir; do
     dir_name=$(basename "$dir")
     size_hr=$(format_size $(( kb * 1024 )))
-    printf "       %-40s %8s\n" "Library/$dir_name/" "$size_hr"
+    printf "            %-40s %8s\n" "$dir_name/" "$size_hr"
 done
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1142,11 +1190,21 @@ done
 
 echo ""
 echo ""
-echo "${BOLD}${GREEN}  ╔══════════════════════════════════════════════════════════╗${RESET}"
-echo "${BOLD}${GREEN}  ║              🍎  HONEYCRISP SUMMARY                     ║${RESET}"
-echo "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════════╣${RESET}"
-printf "${BOLD}${GREEN}  ║${RESET}  %-32s │ %8s │ %-12s${BOLD}${GREEN}║${RESET}\n" "Category" "Found" "Safety"
-echo "${BOLD}${GREEN}  ║${RESET}  ────────────────────────────────┼──────────┼─────────────${BOLD}${GREEN}║${RESET}"
+echo ""
+echo "  ${BOLD}${GREEN}HONEYCRISP SUMMARY${RESET}"
+echo "  ${BOLD}-------------------------------------------------------${RESET}"
+printf "  %-32s  %10s   %-10s\n" "Category" "Found" "Safety"
+echo "  ${DIM}--------------------------------  ----------   ----------${RESET}"
+
+# Format safety label with color
+color_safety() {
+    case "$1" in
+        Safe)    printf "${GREEN}%-10s${RESET}" "Safe" ;;
+        Review)  printf "${YELLOW}%-10s${RESET}" "Review" ;;
+        Caution) printf "${RED}%-10s${RESET}" "Caution" ;;
+        *)       printf "%-10s" "$1" ;;
+    esac
+}
 
 # Sort categories by size descending using a temp approach
 summary_sort_data=""
@@ -1160,14 +1218,14 @@ while read -r _sz idx; do
     safety="${SUMMARY_SAFETY_LABELS[$idx]}"
     if (( size > 0 )); then
         hr=$(format_size "$size")
-        printf "${BOLD}${GREEN}  ║${RESET}  %-32s │ %8s │ %-12s${BOLD}${GREEN}║${RESET}\n" "${cat:0:32}" "$hr" "$safety"
+        safety_colored=$(color_safety "$safety")
+        printf "  %-32s  %10s   %s\n" "${cat:0:32}" "$hr" "$safety_colored"
     fi
 done <<< "$(echo "$summary_sort_data" | sort -rn)"
 
-echo "${BOLD}${GREEN}  ╠══════════════════════════════════════════════════════════╣${RESET}"
+echo "  ${BOLD}-------------------------------------------------------${RESET}"
 grand_hr=$(format_size "$GRAND_TOTAL_BYTES")
-printf "${BOLD}${GREEN}  ║${RESET}  ${BOLD}%-32s${RESET} │ ${BOLD}%8s${RESET} │             ${BOLD}${GREEN}║${RESET}\n" "TOTAL POTENTIAL SAVINGS" "$grand_hr"
-echo "${BOLD}${GREEN}  ╚══════════════════════════════════════════════════════════╝${RESET}"
+printf "  ${BOLD}%-32s  %10s${RESET}\n" "TOTAL POTENTIAL SAVINGS" "$grand_hr"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # NEXT STEPS
@@ -1175,9 +1233,9 @@ echo "${BOLD}${GREEN}  ╚══════════════════
 
 echo ""
 echo ""
-echo "${BOLD}${CYAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo "${BOLD}${CYAN}  📋  WHAT TO DO NEXT${RESET}"
-echo "${BOLD}${CYAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo "  ${BOLD}${CYAN}-------------------------------------------------------${RESET}"
+echo "  ${BOLD}${CYAN}WHAT TO DO NEXT${RESET}"
+echo "  ${BOLD}${CYAN}-------------------------------------------------------${RESET}"
 echo ""
 echo "  ${BOLD}Caches${RESET}"
 echo "    Safe to delete manually or via System Settings → General → Storage."
@@ -1222,6 +1280,6 @@ echo "  ${BOLD}Disk Images & Installers${RESET}"
 echo "    Review .dmg/.pkg/.iso files in Downloads — delete after installation."
 echo ""
 echo ""
-echo "  ${DIM}🍎 Honeycrisp v${VERSION} — scan complete.${RESET}"
-echo "  ${DIM}   Remember: this tool only reports. No files were modified.${RESET}"
+echo "  ${DIM}Honeycrisp v${VERSION} -- scan complete.${RESET}"
+echo "  ${DIM}Remember: this tool only reports. No files were modified.${RESET}"
 echo ""
