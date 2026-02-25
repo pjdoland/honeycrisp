@@ -8,7 +8,6 @@ set -uo pipefail
 
 # ─── Defaults & Globals ───────────────────────────────────────────────────────
 
-VERSION="1.0.0"
 LARGE_FILE_THRESHOLD_MB=500
 QUICK_MODE=false
 NO_COLOR=false
@@ -44,7 +43,7 @@ print_banner() {
     echo ""
     echo "${BOLD}${GREEN}  H O N E Y C R I S P${RESET}"
     echo "${BOLD}${GREEN}  ----------------------------------------${RESET}"
-    echo "${DIM}  Mac Disk Audit Tool v${VERSION}${RESET}"
+    echo "${DIM}  Mac Disk Audit Tool${RESET}"
     echo ""
     echo "  ${CYAN}This script is ${BOLD}READ-ONLY${RESET}${CYAN} — it will ${BOLD}never${RESET}${CYAN} delete,"
     echo "  move, or modify any file on your system.${RESET}"
@@ -226,7 +225,6 @@ Options:
   --threshold MB    Large file threshold in MB (default: 500)
   --output FILE     Also write output to a file
   --help            Show this help message
-  --version         Show version
 
 Examples:
   ./honeycrisp.sh                     Full scan with defaults
@@ -245,7 +243,6 @@ while [[ $# -gt 0 ]]; do
         --threshold)  LARGE_FILE_THRESHOLD_MB="$2"; shift 2 ;;
         --output)     OUTPUT_FILE="$2"; shift 2 ;;
         --help)       show_help; exit 0 ;;
-        --version)    echo "honeycrisp v${VERSION}"; exit 0 ;;
         *)            echo "Unknown option: $1"; show_help; exit 1 ;;
     esac
 done
@@ -1280,6 +1277,6 @@ echo "  ${BOLD}Disk Images & Installers${RESET}"
 echo "    Review .dmg/.pkg/.iso files in Downloads — delete after installation."
 echo ""
 echo ""
-echo "  ${DIM}Honeycrisp v${VERSION} -- scan complete.${RESET}"
+echo "  ${DIM}Honeycrisp -- scan complete.${RESET}"
 echo "  ${DIM}Remember: this tool only reports. No files were modified.${RESET}"
 echo ""

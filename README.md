@@ -55,7 +55,6 @@ Each finding includes a safety rating:
 | `--threshold MB` | Set the large file threshold (default: 500 MB) |
 | `--output FILE` | Save a copy of the report to a file |
 | `--help` | Show usage info |
-| `--version` | Print version |
 
 ## Requirements
 
