@@ -36,7 +36,7 @@ For a faster scan that skips the slow deep searches (node_modules, large file fi
 - Language pack leftovers in apps
 - Time Machine local snapshots
 - Podcasts and music libraries
-- Applications you haven't opened in 6+ months
+- Applications you haven't opened in 6+ months (where Spotlight data is available)
 - Any file over 500 MB (configurable)
 - Top 20 largest directories in your home folder
 

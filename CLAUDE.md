@@ -39,4 +39,6 @@ Everything lives in `honeycrisp.sh`. The structure follows a linear scan pattern
 4. **Summary table** — iterates `SUMMARY_CATS`/`SUMMARY_SIZES`/`SUMMARY_SAFETY_LABELS` parallel arrays (not associative arrays) sorted by size descending
 5. **Next steps guide** — static instructional text per category
 
-To add a new scan category: add a new section between the category scans and the summary table, call `add_summary "Category Name" "$bytes" "🟢 Safe"` to register it, and add a corresponding entry in the next steps section.
+To add a new scan category: add a new section between the category scans and the summary table, call `add_summary "Category Name" "$bytes" "Safe"` to register it (safety values: `"Safe"`, `"Review"`, `"Caution"`), and add a corresponding entry in the next steps section.
+
+Formatting uses fixed-width colored text tags (`[SAFE]`, `[REVIEW]`, `[CAUTION]`) via the `safety_tag()` function — not emoji, which have inconsistent terminal widths.

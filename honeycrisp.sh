@@ -153,10 +153,6 @@ format_size() {
     fi
 }
 
-# Parse du -sk output to bytes
-du_k_to_bytes() {
-    awk '{print $1 * 1024}'
-}
 
 # Check if path exists
 check_exists() {
@@ -198,16 +194,21 @@ is_system_app_support() {
     return 1
 }
 
+# Cache /Applications listing once for app_exists lookups
+INSTALLED_APPS=$(ls /Applications/ 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
 # Check if an app exists in /Applications (loosely)
 app_exists() {
     local name="$1"
     # macOS system components are not "missing" apps
     is_system_app_support "$name" && return 0
     # Check common locations
+    local name_lower
+    name_lower=$(echo "$name" | tr '[:upper:]' '[:lower:]')
     [[ -d "/Applications/${name}.app" ]] || \
     [[ -d "/Applications/${name}" ]] || \
     [[ -d "$HOME/Applications/${name}.app" ]] || \
-    ls /Applications/ 2>/dev/null | grep -qi "$name"
+    echo "$INSTALLED_APPS" | grep -q "$name_lower"
 }
 
 # ─── Usage ────────────────────────────────────────────────────────────────────
@@ -419,7 +420,6 @@ if check_exists "$app_support"; then
 
     echo ""
     echo "  ${DIM}  Top 15 largest subdirectories:${RESET}"
-    app_support_flagged=0
     du -sk "$app_support"/*/ 2>/dev/null | sort -rn | head -15 | while read -r kb dir; do
         dir_name=$(basename "$dir")
         size_hr=$(format_size $(( kb * 1024 )))
@@ -634,25 +634,24 @@ if [[ "$QUICK_MODE" == false ]]; then
     nm_results=$(find "$HOME" -maxdepth 6 -name "node_modules" -type d -prune 2>/dev/null | head -100)
 
     if [[ -n "$nm_results" ]]; then
-        echo ""
-        echo "  ${DIM}  Top 10 node_modules by size:${RESET}"
-        # Get sizes in parallel-ish
+        # Single pass: compute sizes, accumulate total, then display top 10
+        nm_sized=""
         while IFS= read -r nm_dir; do
             kb=$(du -sk "$nm_dir" 2>/dev/null | awk '{print $1}')
-            echo "$kb $nm_dir"
-        done <<< "$nm_results" | sort -rn | head -10 | while read -r kb dir; do
+            nm_total=$(( nm_total + kb * 1024 ))
+            nm_sized+="${kb} ${nm_dir}"$'\n'
+        done <<< "$nm_results"
+
+        echo ""
+        echo "  ${DIM}  Top 10 node_modules by size:${RESET}"
+        echo "$nm_sized" | sort -rn | head -10 | while read -r kb dir; do
+            [[ -z "$kb" ]] && continue
             bytes=$(( kb * 1024 ))
             size_hr=$(format_size "$bytes")
             project=$(dirname "$dir")
             project_name=$(basename "$project")
             print_subrow "$project_name/node_modules" "$size_hr" "$dir"
         done
-
-        # Compute total
-        while IFS= read -r nm_dir; do
-            kb=$(du -sk "$nm_dir" 2>/dev/null | awk '{print $1}')
-            nm_total=$(( nm_total + kb * 1024 ))
-        done <<< "$nm_results"
 
         echo ""
         print_row "review" "node_modules (total)" "$(format_size $nm_total)"
@@ -1043,7 +1042,6 @@ for music_dir in "$HOME/Music/iTunes" "$HOME/Music/Music"; do
         hr=$(format_size "$bytes")
         label=$(basename "$music_dir")
         safety="review"
-        (( bytes > 5368709120 )) && safety="review"  # flag if > 5GB
         print_row "$safety" "$label library" "$hr" "$music_dir"
         media_total=$(( media_total + bytes ))
     fi
@@ -1133,26 +1131,24 @@ if [[ "$QUICK_MODE" == false ]]; then
         -maxdepth 8 -type f -size "+${LARGE_FILE_THRESHOLD_MB}M" 2>/dev/null | head -50)
 
     if [[ -n "$large_files" ]]; then
-        echo ""
+        # Single pass: stat each file once, accumulate total, then display sorted
+        large_sized=""
         while IFS= read -r f; do
             bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
             mod=$(stat -f "%Sm" -t "%Y-%m-%d" "$f" 2>/dev/null || echo "???")
-            echo "$bytes $mod $f"
-        done <<< "$large_files" | sort -rn | head -20 | while read -r bytes mod path; do
+            large_total=$(( large_total + bytes ))
+            large_sized+="${bytes} ${mod} ${f}"$'\n'
+        done <<< "$large_files"
+
+        echo ""
+        echo "$large_sized" | sort -rn | head -20 | while read -r bytes mod path; do
+            [[ -z "$bytes" ]] && continue
             hr=$(format_size "$bytes")
             display_path="${path/#$HOME/~}"
             printf "  %10s   ${DIM}%s${RESET}  %s\n" "$hr" "$mod" "$display_path"
         done
     else
         echo "  ${DIM}  No files over ${LARGE_FILE_THRESHOLD_MB}MB found.${RESET}"
-    fi
-
-    # Re-sum outside the pipe for accurate total
-    if [[ -n "$large_files" ]]; then
-        while IFS= read -r f; do
-            bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
-            large_total=$(( large_total + bytes ))
-        done <<< "$large_files"
     fi
 
     add_summary "Large Files (>${LARGE_FILE_THRESHOLD_MB}MB)" "$large_total" "Review"
