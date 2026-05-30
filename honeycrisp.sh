@@ -125,6 +125,16 @@ safe_du_bytes() {
     fi
 }
 
+# Actual on-disk bytes for a single file (allocated blocks, not logical size).
+# stat "%b" is the count of 512-byte blocks actually allocated, so this stays
+# correct for sparse files (e.g. Docker.raw) and APFS clones, where the logical
+# size ("%z") can be far larger than what is really on disk.
+file_disk_bytes() {
+    local blocks
+    blocks=$(stat -f "%b" "$1" 2>/dev/null || echo 0)
+    echo $(( ${blocks:-0} * 512 ))
+}
+
 # Get size of a path as human readable; returns "0B" if missing
 safe_du() {
     local target="$1"
@@ -806,7 +816,7 @@ for scan_dir in "$HOME/Downloads" "$HOME/Desktop" "$HOME/Documents"; do
         if [[ -n "$found" ]]; then
             echo "  ${DIM}  In $(basename "$scan_dir"):${RESET}"
             while IFS= read -r f; do
-                bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
+                bytes=$(file_disk_bytes "$f")
                 hr=$(format_size "$bytes")
                 fname=$(basename "$f")
                 print_subrow "$fname" "$hr" "$f"
@@ -896,7 +906,7 @@ for scan_dir in "$HOME/Downloads" "$HOME/Desktop"; do
         vids=$(find "$scan_dir" -maxdepth 2 \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \) -type f 2>/dev/null)
         if [[ -n "$vids" ]]; then
             while IFS= read -r f; do
-                bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
+                bytes=$(file_disk_bytes "$f")
                 hr=$(format_size "$bytes")
                 fname=$(basename "$f")
                 print_subrow "$fname" "$hr" "$f"
@@ -925,7 +935,7 @@ if check_exists "$downloads_dir"; then
     echo "  ${DIM}  Top 20 largest files:${RESET}"
     find "$downloads_dir" -maxdepth 1 -type f 2>/dev/null \
         | while IFS= read -r f; do
-            bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
+            bytes=$(file_disk_bytes "$f")
             mod=$(stat -f "%Sm" -t "%Y-%m-%d" "$f" 2>/dev/null || echo "???")
             echo "$bytes $mod $f"
         done \
@@ -945,7 +955,7 @@ if check_exists "$downloads_dir"; then
         [[ -f "$f" ]] || continue
         access_epoch=$(stat -f "%a" "$f" 2>/dev/null || echo "0")
         if (( access_epoch > 0 && access_epoch < one_year_ago )); then
-            bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
+            bytes=$(file_disk_bytes "$f")
             old_total=$(( old_total + bytes ))
             old_count=$(( old_count + 1 ))
         fi
@@ -1130,16 +1140,23 @@ if [[ "$QUICK_MODE" == false ]]; then
         -not -path "*/.Trash/*" \
         -maxdepth 8 -type f -size "+${LARGE_FILE_THRESHOLD_MB}M" 2>/dev/null | head -50)
 
-    if [[ -n "$large_files" ]]; then
-        # Single pass: stat each file once, accumulate total, then display sorted
-        large_sized=""
-        while IFS= read -r f; do
-            bytes=$(stat -f "%z" "$f" 2>/dev/null || echo "0")
-            mod=$(stat -f "%Sm" -t "%Y-%m-%d" "$f" 2>/dev/null || echo "???")
-            large_total=$(( large_total + bytes ))
-            large_sized+="${bytes} ${mod} ${f}"$'\n'
-        done <<< "$large_files"
+    # Single pass: measure each file once, accumulate total, then display sorted.
+    # find -size matches on logical size, so a sparse file (e.g. Docker.raw)
+    # can be selected while its real on-disk footprint is tiny. Measure actual
+    # allocated bytes and drop anything that falls below the threshold.
+    large_sized=""
+    large_count=0
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        bytes=$(file_disk_bytes "$f")
+        (( bytes < threshold_bytes )) && continue
+        mod=$(stat -f "%Sm" -t "%Y-%m-%d" "$f" 2>/dev/null || echo "???")
+        large_total=$(( large_total + bytes ))
+        large_count=$(( large_count + 1 ))
+        large_sized+="${bytes} ${mod} ${f}"$'\n'
+    done <<< "$large_files"
 
+    if (( large_count > 0 )); then
         echo ""
         echo "$large_sized" | sort -rn | head -20 | while read -r bytes mod path; do
             [[ -z "$bytes" ]] && continue
